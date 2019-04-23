@@ -11,7 +11,12 @@ import { withStyles } from "@material-ui/core/styles";
 
 import Chat from "./component/Chat";
 import Modal from "./component/Modal";
-import { PATIENT, DISEASE_BY_NAME, DISEASE_BY_SYMPTOMS } from "./server/Query";
+import {
+  PATIENT,
+  DISEASE_BY_NAME,
+  DISEASE_BY_SYMPTOMS,
+  DISEASES
+} from "./server/Query";
 import { CREATE_CONSULTATION } from "./server/Mutation";
 
 const styles = theme => ({
@@ -204,79 +209,125 @@ const Homepage = props => {
         if (latestKey === "symptoms") {
           client
             .query({
-              query: DISEASE_BY_SYMPTOMS,
-              variables: {
-                symptoms: userChat[latestKey]
-              }
+              query: DISEASES
             })
             .then(res => {
-              const { diseaseBySymptoms } = res.data;
-              const copy = messages.slice();
-              const diseaseID = [];
-              let totalSymptoms = 0;
+              const totalDisease = res.data.diseases.length;
 
-              diseaseBySymptoms.map(disease =>
-                disease.symptoms.map(symptom =>
-                  userChat[latestKey].find(userSymptom => {
-                    if (userSymptom === symptom.name) {
-                      return totalSymptoms++;
+              client
+                .query({
+                  query: DISEASE_BY_SYMPTOMS,
+                  variables: {
+                    symptoms: userChat[latestKey]
+                  }
+                })
+                .then(result => {
+                  const totalDiseaseBySymptoms =
+                    result.data.diseaseBySymptoms.length;
+                  const { diseaseBySymptoms } = result.data;
+                  const naiveBayesData = [];
+                  const diseaseID = [];
+                  const copy = messages.slice();
+
+                  diseaseBySymptoms.map(disease => {
+                    const diseaseNaiveBayes = [];
+                    const diseaseProbability = parseFloat(
+                      (1 / totalDisease).toFixed(2)
+                    );
+
+                    userChat[latestKey].map(userSymptom =>
+                      Boolean(
+                        disease.symptoms.find(
+                          symptom => symptom.name === userSymptom
+                        )
+                      )
+                        ? diseaseNaiveBayes.push(
+                            parseFloat(
+                              (1 / totalDiseaseBySymptoms).toFixed(2)
+                            ) * diseaseProbability
+                          )
+                        : diseaseNaiveBayes.push(0)
+                    );
+
+                    return naiveBayesData.push(diseaseNaiveBayes);
+                  });
+
+                  const totalNaiveBayes = [];
+
+                  for (let i = 0; i < naiveBayesData.length; i++) {
+                    let totalNaiveBayesThisDisease = 0;
+
+                    for (let j = 0; j < naiveBayesData[i].length; j++) {
+                      let divider = 0;
+
+                      for (let k = 0; k < naiveBayesData.length; k++) {
+                        divider += naiveBayesData[k][j];
+                      }
+
+                      totalNaiveBayesThisDisease +=
+                        naiveBayesData[i][j] / divider;
                     }
-                    return false;
-                  })
-                )
-              );
 
-              diseaseBySymptoms.map(disease => {
-                let appropriateSymptoms = 0;
-                const symptomsName = [];
+                    totalNaiveBayes.push(totalNaiveBayesThisDisease);
+                  }
 
-                disease.symptoms.map(symptom => {
-                  userChat[latestKey].find(
-                    userSymptom =>
-                      userSymptom === symptom.name && appropriateSymptoms++
-                  );
-                  return symptomsName.push(symptom.name);
+                  diseaseBySymptoms.map((disease, index) => {
+                    const symptomsName = [];
+
+                    disease.symptoms.map(symptom =>
+                      symptomsName.push(symptom.name)
+                    );
+
+                    const diseaseName =
+                      "Nama Penyakit:\\n" + disease.name + "\\n\\n";
+                    const diseasePercentage =
+                      "Kemungkinan Menderita Penyakit:\\n" +
+                      (
+                        (totalNaiveBayes[index] /
+                          totalNaiveBayes.reduce(
+                            (total, value) => total + value
+                          )) *
+                        100
+                      ).toFixed(2) +
+                      "%\\n\\n";
+                    const diseaseSymptoms =
+                      "Gejala Penyakit:\\n" +
+                      symptomsName.join(", ") +
+                      "\\n\\n";
+                    const diseaseSolution =
+                      "Pengobatan Penyakit:\\n" +
+                      (disease.solution
+                        ? disease.solution
+                        : "Mohon Maaf, Pengobatan untuk Penyakit ini Masih Belum Kami Ketahui. Mohon Periksakan ke Dokter untuk Detail Lebih Lengkap.");
+
+                    copy.push({
+                      type: "moca-ai",
+                      key: "answer",
+                      message:
+                        diseaseName +
+                        diseasePercentage +
+                        diseaseSymptoms +
+                        diseaseSolution
+                    });
+
+                    return diseaseID.push(disease.id);
+                  });
+
+                  client.mutate({
+                    mutation: CREATE_CONSULTATION,
+                    variables: {
+                      name: userChat.name,
+                      dateOfBirth: userChat.dateOfBirth,
+                      gender: userChat.gender,
+                      diagnose: diseaseID,
+                      patientID: patient.isOldPatient
+                        ? patient.isOldPatient
+                        : null
+                    }
+                  });
+
+                  setMessages(copy);
                 });
-
-                const diseaseName =
-                  "Nama Penyakit:\\n" + disease.name + "\\n\\n";
-                const diseasePercentage =
-                  "Kemungkinan Menderita Penyakit:\\n" +
-                  ((appropriateSymptoms / totalSymptoms) * 100).toFixed(2) +
-                  "%\\n\\n";
-                const diseaseSymptoms =
-                  "Gejala Penyakit:\\n" + symptomsName.join(", ") + "\\n\\n";
-                const diseaseSolution =
-                  "Pengobatan Penyakit:\\n" +
-                  (disease.solution
-                    ? disease.solution
-                    : "Mohon Maaf, Pengobatan untuk Penyakit ini Masih Belum Kami Ketahui. Mohon Periksakan ke Dokter untuk Detail Lebih Lengkap.");
-
-                copy.push({
-                  type: "moca-ai",
-                  key: "answer",
-                  message:
-                    diseaseName +
-                    diseasePercentage +
-                    diseaseSymptoms +
-                    diseaseSolution
-                });
-
-                return diseaseID.push(disease.id);
-              });
-
-              client.mutate({
-                mutation: CREATE_CONSULTATION,
-                variables: {
-                  name: userChat.name,
-                  dateOfBirth: userChat.dateOfBirth,
-                  gender: userChat.gender,
-                  diagnose: diseaseID,
-                  patientID: patient.isOldPatient ? patient.isOldPatient : null
-                }
-              });
-
-              setMessages(copy);
             });
         } else {
           client
